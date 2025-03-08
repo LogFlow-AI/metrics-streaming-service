@@ -7,7 +7,7 @@ import numpy as np
 import sys
 import time
 from datetime import datetime
-from config import KAFKA_CONFIG
+from .config import KAFKA_CONFIG
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

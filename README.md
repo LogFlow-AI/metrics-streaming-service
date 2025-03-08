@@ -12,7 +12,7 @@ brew install kafka
 brew install zookeeper
 
 # 2. Start services
-brew services restart zookeeper
+brew services start zookeeper
 brew services start kafka
 
 # 3. Verify services are running

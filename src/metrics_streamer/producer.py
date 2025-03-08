@@ -2,7 +2,7 @@ from kafka import KafkaProducer
 import pandas as pd
 import json
 import logging
-from config import KAFKA_CONFIG
+from .config import KAFKA_CONFIG
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
