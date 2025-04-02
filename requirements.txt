@@ -4,3 +4,4 @@ pytest
 coverage
 kafka-python
 gpuquantile
+ddsketch

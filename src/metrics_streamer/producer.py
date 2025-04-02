@@ -44,7 +44,7 @@ class LogProducer:
                 for _, row in chunk.iterrows():
                     data = {
                         'block_id': row['BlockId'],
-                        'latency': float(row['Latency'])
+                        'latency': int(row['Latency'])
                     }
                     self.send_metric(data)
                     logger.debug(f"Sent metric: {data}")
