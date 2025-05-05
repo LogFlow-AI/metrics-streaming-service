@@ -3,5 +3,5 @@ pandas
 pytest
 coverage
 kafka-python
-gpuquantile
+quantileflow
 ddsketch
