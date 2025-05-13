@@ -24,8 +24,6 @@ brew services list | grep -E 'kafka|zookeeper'
 ```bash
 # 1. 
 pip install -r requirements.txt
-
-
 ```
 
 3. Initialize kafka topic and run the application.
@@ -46,7 +44,6 @@ kafka-topics --list --bootstrap-server localhost:9092
 
 # 5. Run application
 python ./src/main.py --csv ./data/HDFS_v1/preprocessed/Event_traces.csv
-
 ```
 
 4. Monitor & Observe
@@ -59,4 +56,31 @@ watch -n 1 kafka-consumer-groups --bootstrap-server localhost:9092 \
 # Terminal 3: Monitor topic metrics (iffy)
 watch -n 1 kafka-run-class kafka.tools.GetOffsetShell \
   --broker-list localhost:9092 --topic latency-metrics
+```
+
+Below is an example of the output from the latency monitor dashboard. This was taken from a run of the application on the HDFS_v1 dataset with parallelization enabled (num_workers = 4, partitions = 4).
+
+```output
+================================================================================
+Metrics Streamer Latency Monitor Dashboard - 2025-05-06 13:31:02
+================================================================================
+
+Block ID: blk_-9128742458709757181
+Current Latency:   131.00 ms
+
+Performance Metrics:
+Messages Processed:   575061
+Data Points in Sketch:   575061
+Runtime:   462.02 sec
+Throughput:  1244.65 msg/sec
+Refresh Rate:     0.00 sec
+
+Latency Statistics:
+  Mean:     0.00 ms
+
+QuantileFlow DDSketch Percentiles:
+  P50:   7260.81 ms
+  P95:  50529.42 ms
+  P99:  53654.09 ms
+================================================================================
 ```
