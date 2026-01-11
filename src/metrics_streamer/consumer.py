@@ -9,6 +9,7 @@ from .config import KAFKA_CONFIG
 
 # Import sketch algorithms from QuantileFlow
 from QuantileFlow.ddsketch import DDSketch as QuantileFlowDDSketch
+from QuantileFlow.hdrhistogram import HDRHistogram as QuantileFlowHDRHistogram
 from ddsketch import DDSketch as DatadogDDSketch
 from QuantileFlow.momentsketch import MomentSketch as QuantileFlowMomentSketch
 
@@ -19,22 +20,31 @@ def deserialize_message(msg):
     return json.loads(msg.decode('utf-8'))
 
 class LatencyMonitor:
-    def __init__(self, window_size=100, refresh_interval=0.0001, dd_accuracy=0.01, moment_count=10):
+    def __init__(self, sketch_type='quantileflow', window_size=100, refresh_interval=0.0001, dd_accuracy=0.01, moment_count=10):
         self.window_size = window_size
         self.running = True
         self.start_time = time.time()
         self.last_refresh = 0
         self.refresh_interval = refresh_interval
         self.msg_count = 0
+        self.sketch_type = sketch_type
         
-        # Initialize sketches for quantile computation
-        """
-        self.dd_sketch = DDSketch(dd_accuracy)  # DDSketch with 1% relative accuracy
-        """
-        #self.moment_sketch = MomentSketch(moment_count)  # MomentSketch with 10 moments
-        self.datadog_dd_sketch = DatadogDDSketch(dd_accuracy)
-        self.quantileflow_dd_sketch = QuantileFlowDDSketch(dd_accuracy)
-        self.quantileflow_moment_sketch = QuantileFlowMomentSketch(moment_count)
+        # Initialize the selected sketch for quantile computation
+        if sketch_type == 'quantileflow':
+            self.sketch = QuantileFlowDDSketch(dd_accuracy)
+            self.sketch_name = "QuantileFlow DDSketch"
+        elif sketch_type == 'datadog':
+            self.sketch = DatadogDDSketch(dd_accuracy)
+            self.sketch_name = "Datadog DDSketch"
+        elif sketch_type == 'momentsketch':
+            self.sketch = QuantileFlowMomentSketch(moment_count)
+            self.sketch_name = "QuantileFlow MomentSketch"
+        elif sketch_type == 'hdrhistogram':
+            # HDRHistogram needs bounded max_value to calculate quantiles properly
+            self.sketch = QuantileFlowHDRHistogram(num_buckets=100, min_value=1.0, max_value=10000000.0)
+            self.sketch_name = "QuantileFlow HDRHistogram"
+        else:
+            raise ValueError(f"Unknown sketch type: {sketch_type}")
         
     def _create_consumer(self):
         return KafkaConsumer(
@@ -65,31 +75,38 @@ class LatencyMonitor:
             consumer.close()
 
     def calculate_stats(self):
-        stats = {
-            'count': self.quantileflow_dd_sketch.count,
-            'mean': 0  # Will be calculated below if count > 0
-        }
+        # Get count based on sketch type
+        if self.sketch_type == 'momentsketch':
+            # MomentSketch uses summary_statistics() for count
+            summary = self.sketch.summary_statistics()
+            stats = {'count': int(summary.get('count', 0)), 'mean': summary.get('mean', 0)}
+        elif self.sketch_type == 'hdrhistogram':
+            # HDRHistogram uses total_count
+            stats = {'count': self.sketch.total_count, 'mean': 0}
+        elif self.sketch_type == 'datadog':
+            stats = {'count': self.sketch.count, 'mean': 0}
+        else:
+            # QuantileFlow DDSketch uses .count property
+            stats = {'count': self.sketch.count, 'mean': 0}
         
         if stats['count'] > 0:
-            # DDSketch metrics
-            
-            stats['dd_p50'] = self.quantileflow_dd_sketch.quantile(0.5)
-            stats['dd_p95'] = self.quantileflow_dd_sketch.quantile(0.95)
-            stats['dd_p99'] = self.quantileflow_dd_sketch.quantile(0.99)
-            
-            # MomentSketch metrics
-            #stats['moment_p50'] = self.moment_sketch.quantile(0.5)
-            #stats['moment_p95'] = self.moment_sketch.quantile(0.95)
-            #stats['moment_p99'] = self.moment_sketch.quantile(0.99)
-            """
-            # Datadog DDSketch metrics
-            stats['datadog_dd_p50'] = self.datadog_dd_sketch.get_quantile_value(0.5)
-            stats['datadog_dd_p95'] = self.datadog_dd_sketch.get_quantile_value(0.95)
-            stats['datadog_dd_p99'] = self.datadog_dd_sketch.get_quantile_value(0.99)
-            """
-            # Get summary statistics from moment_sketch
-            #summary = self.moment_sketch.summary_statistics()
-            #stats['mean'] = summary.get('mean', 0)
+            # Get percentiles based on sketch type
+            if self.sketch_type == 'datadog':
+                stats['p50'] = self.sketch.get_quantile_value(0.5)
+                stats['p95'] = self.sketch.get_quantile_value(0.95)
+                stats['p99'] = self.sketch.get_quantile_value(0.99)
+            elif self.sketch_type == 'momentsketch':
+                stats['p50'] = self.sketch.quantile(0.5)
+                stats['p95'] = self.sketch.quantile(0.95)
+                stats['p99'] = self.sketch.quantile(0.99)
+            elif self.sketch_type == 'hdrhistogram':
+                stats['p50'] = self.sketch.quantile(0.5)
+                stats['p95'] = self.sketch.quantile(0.95)
+                stats['p99'] = self.sketch.quantile(0.99)
+            else:  # quantileflow ddsketch
+                stats['p50'] = self.sketch.quantile(0.5)
+                stats['p95'] = self.sketch.quantile(0.95)
+                stats['p99'] = self.sketch.quantile(0.99)
             
         return stats
 
@@ -98,14 +115,14 @@ class LatencyMonitor:
             data = record.value
             latency = data['latency']
             
-            # Insert the latency value into both sketches
+            # Insert the latency value into the selected sketch
+            if self.sketch_type == 'datadog':
+                self.sketch.add(float(latency))
+            else:
+                # QuantileFlow sketches use .insert()
+                self.sketch.insert(latency)
             
-            self.quantileflow_dd_sketch.insert(latency)
-            
-            #self.quantileflow_moment_sketch.insert(latency)
-
-            # self.datadog_dd_sketch.add(float(latency))
-            
+            self.msg_count += 1  # Count every message processed
             stats = self.calculate_stats()
             self._print_metrics(data, stats)
         except Exception as e:
@@ -120,12 +137,12 @@ class LatencyMonitor:
         
         self.last_refresh = current_time
         elapsed = current_time - self.start_time
-        self.msg_count += 1
         throughput = self.msg_count / elapsed if elapsed > 0 else 0
         
         sys.stdout.write("\033[2J\033[H")  # Clear screen
         sys.stdout.write(f"{'='*80}\n")
-        sys.stdout.write(f"GPUQuantile Latency Monitor Dashboard - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        sys.stdout.write(f"Latency Monitor Dashboard - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        sys.stdout.write(f"Sketch Algorithm: {self.sketch_name}\n")
         sys.stdout.write(f"{'='*80}\n\n")
         
         # Block Information
@@ -144,21 +161,11 @@ class LatencyMonitor:
         sys.stdout.write("Latency Statistics:\n")
         sys.stdout.write(f"  Mean: {stats['mean']:>8.2f} ms\n\n")
         
-        sys.stdout.write("QuantileFlow DDSketch Percentiles:\n")
-        sys.stdout.write(f"  P50:  {stats.get('dd_p50', 0):>8.2f} ms\n")
-        sys.stdout.write(f"  P95:  {stats.get('dd_p95', 0):>8.2f} ms\n")
-        sys.stdout.write(f"  P99:  {stats.get('dd_p99', 0):>8.2f} ms\n\n")
+        sys.stdout.write(f"{self.sketch_name} Percentiles:\n")
+        sys.stdout.write(f"  P50:  {stats.get('p50', 0):>8.2f} ms\n")
+        sys.stdout.write(f"  P95:  {stats.get('p95', 0):>8.2f} ms\n")
+        sys.stdout.write(f"  P99:  {stats.get('p99', 0):>8.2f} ms\n")
         
-        #sys.stdout.write("MomentSketch Percentiles:\n")
-        #sys.stdout.write(f"  P50:  {stats.get('moment_p50', 0):>8.2f} ms\n")
-        #sys.stdout.write(f"  P95:  {stats.get('moment_p95', 0):>8.2f} ms\n")
-        #sys.stdout.write(f"  P99:  {stats.get('moment_p99', 0):>8.2f} ms\n")
-        """
-        sys.stdout.write("Datadog DDSketch Percentiles:\n")
-        sys.stdout.write(f"  P50:  {stats.get('datadog_dd_p50', 0):>8.2f} ms\n")
-        sys.stdout.write(f"  P95:  {stats.get('datadog_dd_p95', 0):>8.2f} ms\n")
-        sys.stdout.write(f"  P99:  {stats.get('datadog_dd_p99', 0):>8.2f} ms\n")
-        """
         sys.stdout.write(f"\n{'='*80}\n")
         sys.stdout.flush()
 

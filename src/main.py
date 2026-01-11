@@ -11,19 +11,21 @@ def run_producer(csv_file):
     producer = LogProducer()
     producer.stream_logs(csv_file)
 
-def run_consumer():
+def run_consumer(sketch_type):
     from metrics_streamer.consumer import LatencyMonitor
-    consumer = LatencyMonitor()
+    consumer = LatencyMonitor(sketch_type=sketch_type)
     consumer.process_metrics()
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv', required=True, help='Input CSV file path')
+    parser.add_argument('--sketch', choices=['quantileflow', 'datadog', 'momentsketch', 'hdrhistogram'], 
+                        default='quantileflow', help='Sketch algorithm to use (default: quantileflow)')
     args = parser.parse_args()
 
     try:
         # Create processes with target functions
-        consumer_process = Process(target=run_consumer)
+        consumer_process = Process(target=run_consumer, args=(args.sketch,))
         producer_process = Process(target=run_producer, args=(args.csv,))
 
         # Start processes
